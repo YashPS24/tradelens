@@ -194,6 +194,24 @@ td.warn { color: var(--warn); }
 .sg-help p { font-size: 13px; color: #c8cfdc; margin: 0 0 10px; }
 .sg-help a { color: var(--accent); }
 
+.sg-setup { margin-top: 12px; border-color: var(--accent); }
+.sg-setup .card-h .mini { margin-left: auto; }
+.setup { margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--panel2); border-left: 3px solid var(--up); }
+.setup.short { border-left-color: var(--down); }
+.st-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px 12px; }
+.setup.compact .st-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.st-grid > div { display: flex; flex-direction: column; min-width: 0; }
+.st-grid span { font-size: 11px; color: var(--muted); }
+.st-grid b { font-size: 14px; overflow-wrap: anywhere; }
+.st-grid em { font-style: normal; font-size: 11px; color: var(--muted); }
+.st-grid .warn { color: var(--warn); }
+.st-note { font-size: 12px; color: var(--warn); margin-top: 8px; }
+.st-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.st-btns { display: flex; gap: 6px; }
+.mini.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sgev { cursor: default; }
+.sgev-top { cursor: pointer; }
+
 /* learn */
 .progress { height: 6px; background: var(--panel2); border-radius: 3px; margin-bottom: 14px; overflow: hidden; }
 .progress .bar { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
@@ -228,6 +246,7 @@ td.warn { color: var(--warn); }
 
 @media (max-width: 1000px) {
   .analyze-grid, .paper-grid, .learn-grid, .sg-grid { grid-template-columns: minmax(0, 1fr); }
+  .st-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .cards4 { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 700px) {
@@ -238,6 +257,7 @@ td.warn { color: var(--warn); }
   .ex-pick .small { display: none; }
   .hide-sm { display: none; }
   .cards3 { grid-template-columns: 1fr; }
+  .st-grid, .setup.compact .st-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lessons { grid-template-columns: minmax(0, 1fr); }
   .ch-main { height: 320px; }
   .price-now { margin-left: 0; }

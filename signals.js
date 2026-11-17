@@ -43,6 +43,30 @@ function backtest(ev, I, cs) {
   return { n, wins, rate: n ? wins / n : null, avg: n ? (move / n) * 100 : null };
 }
 
+/* ---------- trade setup: entry, stop loss, take profits, leverage ----------
+ * Stop loss: just beyond the nearest support (long) / resistance (short), kept between 1 and 3 ATR away;
+ *   1.5 ATR if there is no level. Take profits at 1.5R and 3R (R = entry-to-stop distance).
+ * Leverage: highest whole number that keeps the (isolated) liquidation price at least twice as far as the
+ *   stop loss, capped at 10x. Above "max", liquidation would hit before the stop loss. */
+const SG_MMR = 0.005;
+function tradeSetup(cs, dir) {
+  if (!dir) return null;
+  const n = cs.length, entry = cs[n - 1].close, a = atr(cs);
+  if (!a) return null;
+  const { sup, res } = srLevels(cs);
+  let sl;
+  if (dir > 0) { sl = sup != null ? sup - 0.25 * a : entry - 1.5 * a; sl = Math.min(entry - a, Math.max(entry - 3 * a, sl)); }
+  else { sl = res != null ? res + 0.25 * a : entry + 1.5 * a; sl = Math.max(entry + a, Math.min(entry + 3 * a, sl)); }
+  const R = Math.abs(entry - sl), dist = R / entry;
+  const levSafe = Math.max(1, Math.min(10, Math.floor(1 / (2 * dist + SG_MMR))));
+  const levMax = Math.max(1, Math.floor(1 / (dist + SG_MMR)));
+  const liq = dir > 0 ? entry * (1 - 1 / levSafe + SG_MMR) : entry * (1 + 1 / levSafe - SG_MMR);
+  const tp1 = entry + dir * 1.5 * R, tp2 = entry + dir * 3 * R;
+  const wall = dir > 0 ? res : sup; // first level price must get through
+  const wallBeforeTp1 = wall != null && (dir > 0 ? wall < tp1 : wall > tp1);
+  return { dir, entry, sl, tp1, tp2, R, dist, levSafe, levMax, liq, wall, wallBeforeTp1, atr: a };
+}
+
 const sg = { results: {}, events: [], scanning: false, last: 0, exId: null, token: 0, filter: 'all', progress: 0 };
 const sgVisible = () => $('#view-signals').classList.contains('active');
 
@@ -50,15 +74,17 @@ function analyzeSeries(a, tf, rows) {
   const cs = rows.map(toCandle);
   if (cs.length < 60) return { err: 'Not enough history' };
   const I = computeAll(cs), ev = evaluate(cs, I), n = cs.length;
+  const setups = { 1: tradeSetup(cs, 1), '-1': tradeSetup(cs, -1) };
+  const cellDir = ev.norm > 0.15 ? 1 : ev.norm < -0.15 ? -1 : 0;
   const events = [];
   for (const e of SG_EVENTS) {
     for (let i = n - 3; i < n; i++) {
       if (!e.test(I, cs, i)) continue;
-      events.push({ a, tf, ev: e, ago: n - 1 - i, forming: i === n - 1, price: cs[i].close, time: cs[i].time - TZ_SHIFT, stats: backtest(e, I, cs) });
+      events.push({ a, tf, ev: e, ago: n - 1 - i, forming: i === n - 1, price: cs[i].close, time: cs[i].time - TZ_SHIFT, stats: backtest(e, I, cs), setup: setups[e.dir] });
     }
   }
   const rsiNow = I.rsi[n - 1];
-  return { norm: ev.norm, score: ev.score, count: ev.sigs.length, label: ev.label, rsi: rsiNow, events };
+  return { norm: ev.norm, score: ev.score, count: ev.sigs.length, label: ev.label, rsi: rsiNow, events, dir: cellDir, setup: cellDir ? setups[cellDir] : null };
 }
 
 async function pool(jobs, n, gap, tok) {
@@ -120,6 +146,59 @@ function sgAgreement(res) {
   const word = dir > 0 ? 'bullish' : dir < 0 ? 'bearish' : 'mixed';
   return { h: dir ? `<span class="${dir > 0 ? 'up' : 'down'}"><b>${Math.max(bull, bear)}/${vals.length}</b> ${word}</span><div class="agree"><i class="${dir > 0 ? 'bu' : 'be'}" style="width:${pct * 100}%"></i></div>` : '<span class="muted">mixed</span>', dir };
 }
+// Only touch the DOM when the markup changed, so buttons stay clickable during the 3-second refresh.
+const setHTML = (el, html) => { if (el._h !== html) { el.innerHTML = html; el._h = html; } };
+const pctFrom = (x, entry) => fmtPct(((x - entry) / entry) * 100);
+function sgSetupHTML(a, tf, st, compact) {
+  if (!st) return '';
+  const long = st.dir > 0, side = long ? 'Long' : 'Short';
+  const acct = typeof paper !== 'undefined' ? Math.max(0, paper.cash) : 10000;
+  const riskUsd = acct * 0.01, notional = riskUsd / st.dist, margin = notional / st.levSafe;
+  const note = st.wallBeforeTp1 ? `<div class="st-note">${long ? 'Resistance' : 'Support'} at <span class="mono">${fmtP(st.wall)}</span> comes before TP1, so price may stall there.</div>` : '';
+  return `<div class="setup ${long ? 'long' : 'short'}${compact ? ' compact' : ''}">
+    <div class="st-grid">
+      <div><span>Side</span><b class="${long ? 'up' : 'down'}">${side}</b></div>
+      <div><span>Entry (EP)</span><b class="mono">${fmtP(st.entry)}</b></div>
+      <div><span>Stop loss (SL)</span><b class="mono down">${fmtP(st.sl)}</b><em>${pctFrom(st.sl, st.entry)}</em></div>
+      <div><span>Take profit 1</span><b class="mono up">${fmtP(st.tp1)}</b><em>${pctFrom(st.tp1, st.entry)} · 1:1.5</em></div>
+      <div><span>Take profit 2</span><b class="mono up">${fmtP(st.tp2)}</b><em>${pctFrom(st.tp2, st.entry)} · 1:3</em></div>
+      <div><span>Leverage</span><b class="mono warn">≤ ${st.levSafe}×</b><em>liq ≈ ${fmtP(st.liq)} · never above ${st.levMax}×</em></div>
+    </div>
+    ${note}
+    <div class="st-foot"><span class="muted small">Risking 1% (${fmtUsd(riskUsd)}) of ${fmtUsd(acct)} paper cash: margin ${fmtUsd(margin)} at ${st.levSafe}× (size ${fmtUsd(notional)}).</span>
+      <span class="st-btns"><button class="mini" data-chart="${a}|${tf}">Open chart</button><button class="mini primary" data-paper="${a}|${tf}|${st.dir}">Paper trade this</button></span></div>
+  </div>`;
+}
+let sgSelected = null; // {a, tf} chosen from the table
+function sgRenderSetupCard() {
+  const card = $('#sgSetup'); if (!card) return;
+  if (!sgSelected) { card.hidden = true; card._h = null; return; }
+  const { a, tf } = sgSelected, r = sg.exId === EX().id && sg.results[a] && sg.results[a][tf];
+  card.hidden = false;
+  let body;
+  if (!r || r.norm == null) body = `<p class="muted small">${r && r.na ? `${EX().name} has no ${SG_TF_LABEL[tf]} candles.` : 'Still scanning…'}</p>`;
+  else if (!r.setup) body = `<p class="muted small">No clear direction on ${a} ${SG_TF_LABEL[tf]} (score ${r.score > 0 ? '+' : ''}${r.score} of ${r.count}), so there's no setup. Waiting is also a decision.</p><div class="st-btns"><button class="mini" data-chart="${a}|${tf}">Open chart</button></div>`;
+  else body = sgSetupHTML(a, tf, r.setup);
+  setHTML(card, `<div class="card-h">Trade setup · ${a} ${SG_TF_LABEL[tf]} <span class="muted small">${r && r.label ? r.label : ''}</span><button class="mini" data-close-setup>✕</button></div>${body}`);
+}
+function sgFindSetup(a, tf, dir) {
+  const r = sg.results[a] && sg.results[a][tf];
+  if (r && r.setup && r.setup.dir === dir) return r.setup;
+  const e = sg.events.find((x) => x.a === a && x.tf === tf && x.ev.dir === dir);
+  return e ? e.setup : null;
+}
+function sgPaperTrade(a, tf, dir) {
+  const st = sgFindSetup(a, tf, dir); if (!st) return;
+  const num = (x) => Number(x.toFixed(dp(x)));
+  setMode('fut');
+  $('#pSym').value = a; $('#pLev').value = st.levSafe;
+  const acct = Math.max(0, paper.cash), margin = (acct * 0.01) / st.dist / st.levSafe;
+  $('#fMargin').value = Math.floor(Math.min(margin, acct / (1 + st.levSafe * FUT_FEE)) * 100) / 100;
+  $('#fTp').value = num(st.tp1); $('#fSl').value = num(st.sl);
+  updateForms(); showView('paper');
+  pMsg(`Setup loaded: ${dir > 0 ? 'Long' : 'Short'} ${a} at ${st.levSafe}× with TP ${fmtP(st.tp1)} and SL ${fmtP(st.sl)}. Check it, then press ${dir > 0 ? 'Buy / Long' : 'Sell / Short'}.`, true);
+}
+
 let sgRenderQueued = false;
 function sgQueueRender() { if (!sgRenderQueued) { sgRenderQueued = true; setTimeout(() => { sgRenderQueued = false; sgRender(); }, 300); } }
 function sgRender() {
@@ -140,7 +219,7 @@ function sgRender() {
     ] });
   }
   renderRows($('#sgTable tbody'), rows, 8, sg.filter === 'all' ? 'Scanning…' : `No coins where most timeframes are ${sg.filter === 'bull' ? 'bullish' : 'bearish'} right now.`);
-  sgRenderFeed(); sgRenderStatus();
+  sgRenderFeed(); sgRenderStatus(); sgRenderSetupCard();
 }
 function sgRenderFeed() {
   const list = sg.exId === EX().id ? sg.events.slice() : [];
@@ -148,21 +227,22 @@ function sgRenderFeed() {
   const ev = list.filter((e) => !want || e.ev.dir === want)
     .sort((x, y) => x.ago - y.ago || (y.stats.rate ?? 0) - (x.stats.rate ?? 0) || SG_TFS.indexOf(y.tf) - SG_TFS.indexOf(x.tf));
   if (!ev.length) {
-    $('#sgFeed').innerHTML = `<p class="muted small">${sg.scanning && !sg.last ? 'Scanning…' : 'No fresh crossover, breakout or volume events in the last 3 candles.'}</p>`;
+    setHTML($('#sgFeed'), `<p class="muted small">${sg.scanning && !sg.last ? 'Scanning…' : 'No fresh crossover, breakout or volume events in the last 3 candles.'}</p>`);
     return;
   }
-  $('#sgFeed').innerHTML = ev.slice(0, 40).map((e) => {
+  setHTML($('#sgFeed'), ev.slice(0, 40).map((e) => {
     const s = e.stats, up = e.ev.dir > 0;
     const hist = s.n >= 5
       ? `Past ${s.n} times on ${e.a} ${SG_TF_LABEL[e.tf]}: price moved ${up ? 'up' : 'down'} ${SG_FORWARD} candles later in <b class="${s.rate >= 0.55 ? 'up' : s.rate < 0.45 ? 'down' : ''}">${Math.round(s.rate * 100)}%</b> of cases (avg ${s.avg >= 0 ? '+' : ''}${s.avg.toFixed(2)}% in the signal's direction).`
       : `Too few past cases (${s.n}) on ${e.a} ${SG_TF_LABEL[e.tf]} to judge reliability.`;
     const when = e.forming ? '<span class="warn">current candle, may still change</span>' : e.ago === 1 ? '1 candle ago' : `${e.ago} candles ago`;
-    return `<div class="sgev" data-a="${e.a}" data-tf="${e.tf}" tabindex="0">
-      <div class="sgev-top"><span class="tf">${SG_TF_LABEL[e.tf]}</span><b>${e.a}</b><span class="tag ${up ? 'bull' : 'bear'}">${up ? 'Bullish' : 'Bearish'}</span><span class="muted small">${when}</span></div>
+    return `<div class="sgev">
+      <div class="sgev-top" data-chart="${e.a}|${e.tf}" tabindex="0"><span class="tf">${SG_TF_LABEL[e.tf]}</span><b>${e.a}</b><span class="tag ${up ? 'bull' : 'bear'}">${up ? 'Bullish' : 'Bearish'}</span><span class="muted small">${when}</span></div>
       <div>${e.ev.name} at <span class="mono">${fmtP(e.price)}</span></div>
       <div class="muted small">${hist}</div>
+      ${sgSetupHTML(e.a, e.tf, e.setup, true)}
     </div>`;
-  }).join('');
+  }).join(''));
 }
 function sgRenderStatus() {
   const bar = $('#sgBar'); if (!bar) return;
@@ -185,7 +265,7 @@ window.onViewShown = (v) => {
   if (!sg.scanning && (sg.exId !== EX().id || Date.now() - sg.last > SG_REFRESH_MS)) sgScan();
 };
 window.onExchangeChanged = () => {
-  sg.token++; sg.scanning = false; sg.results = {}; sg.events = []; sg.last = 0; sg.exId = null; sg.progress = 0;
+  sg.token++; sg.scanning = false; sg.results = {}; sg.events = []; sg.last = 0; sg.exId = null; sg.progress = 0; sgSelected = null;
   sgRender(); sgRenderStatus();
   if (sgVisible()) sgScan();
 };
@@ -197,11 +277,19 @@ $('#sgFilter').addEventListener('click', (e) => {
 $('#sgTable tbody').addEventListener('click', (e) => {
   const td = e.target.closest('td'); if (!td) return;
   const tr = td.parentElement, a = tr.querySelector('b') && tr.querySelector('b').textContent;
-  const tfIdx = td.cellIndex - 3;
-  if (a) sgOpen(a, SG_TFS[tfIdx] || state.interval);
+  const tf = SG_TFS[td.cellIndex - 3] || (sgSelected && sgSelected.a === a ? sgSelected.tf : '1h');
+  if (!a) return;
+  sgSelected = { a, tf }; sgRenderSetupCard();
+  $('#sgSetup').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
-$('#sgFeed').addEventListener('click', (e) => { const d = e.target.closest('.sgev'); if (d) sgOpen(d.dataset.a, d.dataset.tf); });
-$('#sgFeed').addEventListener('keydown', (e) => { const d = e.target.closest('.sgev'); if (d && e.key === 'Enter') sgOpen(d.dataset.a, d.dataset.tf); });
+$('#view-signals').addEventListener('click', (e) => {
+  const p = e.target.closest('[data-paper]');
+  if (p) { const [a, tf, dir] = p.dataset.paper.split('|'); return sgPaperTrade(a, tf, +dir); }
+  const c = e.target.closest('[data-chart]');
+  if (c) { const [a, tf] = c.dataset.chart.split('|'); return sgOpen(a, tf); }
+  if (e.target.closest('[data-close-setup]')) { sgSelected = null; sgRenderSetupCard(); }
+});
+$('#sgFeed').addEventListener('keydown', (e) => { const d = e.target.closest('[data-chart]'); if (d && e.key === 'Enter') { const [a, tf] = d.dataset.chart.split('|'); sgOpen(a, tf); } });
 setInterval(() => {
   if (!sgVisible()) return;
   sgRender(); // live prices
