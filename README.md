@@ -6,7 +6,7 @@ A real-time crypto market analysis and trading education site. It's a static sit
 - **Exchange switcher**: Binance, Bybit, OKX, Coinbase or Kraken, picked from the header (link straight to one with `?ex=bybit`)
 - **Markets**: live prices, 24h change, high/low and volume for 12 major coins, streamed over WebSocket
 - **Analyze**: candlestick chart (1m–1D) with SMA 20, EMA 50, Bollinger Bands, auto support/resistance, RSI and MACD panes, plus a live order book, a trades tape and a plain-English technical summary
-- **Signals**: scans every coin on 15m, 1h, 4h and 1D with the Analyze rules, shows how many timeframes agree, and lists fresh crossover / breakout / volume events with how often each worked on that coin in the past
+- **Signals**: scans every coin on 15m, 1h, 4h and 1D. It first classifies the market trend (EMA 50/200 + ADX ≥ 20), then gives trade setups (entry, stop loss, take profits, leverage) only for signals that go with the trend, and shows a live accuracy check that replays every past signal on the selected exchange
 - **Paper Trade**: $10,000 of virtual money at live prices. Spot buy / sell (0.1% fee) and simulated Futures long / short with 1–50× leverage, take profit / stop loss and liquidation (stored in the browser)
 - **Learn**: 8 lessons with "See it live" links to the chart, a position-size calculator and a quiz
 

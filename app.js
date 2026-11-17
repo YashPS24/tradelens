@@ -421,7 +421,9 @@ function analyze(force) {
   $('#gaugeNeedle').style.left = `${50 + norm * 48}%`;
   $('#gaugeText').innerHTML = `<span class="${cls(norm)}">${label}</span>`;
   const tagTxt = { bull: 'Bullish', bear: 'Bearish', neutral: 'Neutral' };
-  $('#signals').innerHTML = sigs.map((s) => `<li class="${state.highlight === s.key ? 'hl' : ''}"><div class="sig-top"><b>${s.name}</b><span class="tag ${s.verdict}">${tagTxt[s.verdict]}</span></div><div class="sig-top"><span class="mono small">${s.value}</span></div><div class="sig-ex">${s.explain}</div></li>`).join('');
+  const tn = typeof window.trendNow === 'function' ? window.trendNow(cs) : null;
+  const trendLi = tn ? `<li class="${state.highlight === 'trend' ? 'hl' : ''}"><div class="sig-top"><b>Market regime</b><span class="tag ${tn.dir > 0 ? 'bull' : tn.dir < 0 ? 'bear' : 'neutral'}">${tn.label}</span></div><div class="sig-top"><span class="mono small">ADX ${tn.adx != null ? tn.adx.toFixed(0) : '—'} · EMA 50/200</span></div><div class="sig-ex">${tn.dir ? `Confirmed ${tn.dir > 0 ? 'uptrend' : 'downtrend'}: signals in this direction did best in backtests; trades against it did worst.` : 'No confirmed trend (or too weak: ADX under 20). Signals here were unreliable in backtests.'}</div></li>` : '';
+  $('#signals').innerHTML = trendLi + sigs.map((s) => `<li class="${state.highlight === s.key ? 'hl' : ''}"><div class="sig-top"><b>${s.name}</b><span class="tag ${s.verdict}">${tagTxt[s.verdict]}</span></div><div class="sig-top"><span class="mono small">${s.value}</span></div><div class="sig-ex">${s.explain}</div></li>`).join('');
 
   state.levels = srLevels(cs);
   const a = atr(cs);
