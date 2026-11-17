@@ -141,6 +141,29 @@ select, input[type=number] { background: var(--panel); border: 1px solid var(--b
 .msg { font-size: 13px; min-height: 20px; }
 .tbl td, .tbl th { font-size: 13px; }
 
+.seg.full { display: flex; width: 100%; margin-bottom: 12px; }
+.seg.full button { flex: 1; padding: 8px; font-weight: 600; }
+#sideSeg button[data-side=buy].active { background: var(--up); color: #04150e; }
+#sideSeg button[data-side=sell].active { background: var(--down); color: #fff; }
+.btn.sell { background: var(--down); color: #fff; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.fld input, .fld select { width: 100%; min-width: 0; }
+.order { min-width: 0; }
+.row2 .btn { margin: 0; }
+.avail { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.avail b { color: var(--text); font-family: "JetBrains Mono", monospace; }
+.est { font-size: 12px; color: var(--muted); min-height: 18px; margin-bottom: 10px; line-height: 1.6; }
+.est b { font-family: "JetBrains Mono", monospace; }
+.note { margin: 10px 0 0; }
+.lev-val { color: var(--warn); font-family: "JetBrains Mono", monospace; }
+input[type=range] { width: 100%; accent-color: var(--warn); }
+#levQuick button.active { border-color: var(--warn); color: var(--warn); }
+.mini { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer; }
+.mini.sell { border-color: rgba(234,57,67,.5); color: var(--down); }
+.mini:hover { border-color: var(--accent); }
+td.warn { color: var(--warn); }
+.nowrap { white-space: nowrap; }
+
 /* learn */
 .progress { height: 6px; background: var(--panel2); border-radius: 3px; margin-bottom: 14px; overflow: hidden; }
 .progress .bar { height: 100%; width: 0; background: var(--accent); transition: width .3s; }

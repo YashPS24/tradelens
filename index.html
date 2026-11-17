@@ -95,36 +95,60 @@
   <section id="view-paper" class="view">
     <div class="section-head">
       <h1>Paper trading</h1>
-      <p class="muted">Practice with $10,000 of virtual money at live prices. 0.1% fee per trade. Saved in this browser only.</p>
+      <p class="muted">Practice Spot and Futures trading with $10,000 of virtual money at live prices. Saved in this browser only.</p>
     </div>
     <div class="cards4">
       <div class="card"><div class="muted small">Total equity</div><div id="pEquity" class="big mono">—</div></div>
-      <div class="card"><div class="muted small">Cash</div><div id="pCash" class="big mono">—</div></div>
+      <div class="card"><div class="muted small">Available cash</div><div id="pCash" class="big mono">—</div></div>
       <div class="card"><div class="muted small">Unrealized P&amp;L</div><div id="pUpnl" class="big mono">—</div></div>
-      <div class="card"><div class="muted small">Realized P&amp;L</div><div id="pRpnl" class="big mono">—</div></div>
+      <div class="card"><div class="muted small">Realized P&amp;L (after fees)</div><div id="pRpnl" class="big mono">—</div></div>
     </div>
     <div class="paper-grid">
-      <div class="card">
-        <div class="card-h">New order</div>
+      <div class="card order">
+        <div class="seg full" id="mktSeg"><button data-m="spot" class="active">Spot</button><button data-m="fut">Futures</button></div>
         <label class="fld">Asset<select id="pSym"></select></label>
-        <div class="live-px">Live price: <span id="pPx" class="mono">—</span></div>
-        <label class="fld">Buy amount (USDT)<input id="pAmt" type="number" min="1" step="any" value="1000" /></label>
-        <div class="quick"><button data-pct="0.1">10%</button><button data-pct="0.25">25%</button><button data-pct="0.5">50%</button><button data-pct="1">Max</button></div>
-        <button class="btn buy" id="pBuy">Buy at market</button>
-        <div class="divider"></div>
-        <div class="muted small">Sell part of your position</div>
-        <div class="quick sell-q"><button data-sell="0.25">25%</button><button data-sell="0.5">50%</button><button data-sell="1">Sell all</button></div>
+        <div class="live-px">Live price: <span id="pPx" class="mono">—</span> <span class="muted small" id="pExName"></span></div>
+
+        <div id="spotForm">
+          <div class="seg full side" id="sideSeg"><button data-side="buy" class="active">Buy</button><button data-side="sell">Sell</button></div>
+          <div class="avail" id="spotAvail"></div>
+          <label class="fld"><span id="amtLabel">Spend (USDT)</span><input id="pAmt" type="number" min="0" step="any" value="1000" inputmode="decimal" /></label>
+          <div class="quick" id="spotQuick"><button data-pct="0.25">25%</button><button data-pct="0.5">50%</button><button data-pct="0.75">75%</button><button data-pct="1">Max</button></div>
+          <div class="est" id="spotEst"></div>
+          <button class="btn buy" id="spotGo">Buy</button>
+          <p class="muted small note">Spot: you own the coin. Sell only what you hold; 0.1% fee per trade.</p>
+        </div>
+
+        <div id="futForm" hidden>
+          <label class="fld"><span>Leverage <b id="levVal" class="lev-val">10×</b></span><input id="pLev" type="range" min="1" max="50" value="10" /></label>
+          <div class="quick" id="levQuick"><button data-lev="1">1×</button><button data-lev="3">3×</button><button data-lev="5">5×</button><button data-lev="10">10×</button><button data-lev="20">20×</button><button data-lev="50">50×</button></div>
+          <div class="avail" id="futAvail"></div>
+          <label class="fld">Margin (USDT)<input id="fMargin" type="number" min="0" step="any" value="500" inputmode="decimal" /></label>
+          <div class="quick" id="futQuick"><button data-pct="0.1">10%</button><button data-pct="0.25">25%</button><button data-pct="0.5">50%</button><button data-pct="1">Max</button></div>
+          <div class="row2">
+            <label class="fld">Take profit<input id="fTp" type="number" step="any" placeholder="Optional price" inputmode="decimal" /></label>
+            <label class="fld">Stop loss<input id="fSl" type="number" step="any" placeholder="Optional price" inputmode="decimal" /></label>
+          </div>
+          <div class="est" id="futEst"></div>
+          <div class="row2"><button class="btn buy" id="goLong">Buy / Long</button><button class="btn sell" id="goShort">Sell / Short</button></div>
+          <p class="muted small note">Simulated perpetual futures: isolated margin, 0.05% fee on open and close, 0.5% maintenance margin, mark price = live spot price, no funding fees. Long profits when price rises, short profits when it falls.</p>
+        </div>
+
         <div id="pMsg" class="msg"></div>
         <button class="btn ghost" id="pReset">Reset account</button>
       </div>
       <div class="col">
         <div class="card">
-          <div class="card-h">Open positions</div>
-          <div class="table-wrap"><table class="tbl" id="pPos"><thead><tr><th>Asset</th><th class="r">Qty</th><th class="r">Avg entry</th><th class="r">Price</th><th class="r">Value</th><th class="r">P&amp;L</th></tr></thead><tbody></tbody></table></div>
+          <div class="card-h">Futures positions</div>
+          <div class="table-wrap"><table class="tbl" id="pFut"><thead><tr><th>Contract</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Mark</th><th class="r">Liq. price</th><th class="r">Margin</th><th class="r">P&amp;L (ROE)</th><th class="r">TP / SL</th><th class="r">Close</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-h">Spot holdings</div>
+          <div class="table-wrap"><table class="tbl" id="pPos"><thead><tr><th>Asset</th><th class="r">Qty</th><th class="r">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r">P&amp;L</th><th></th></tr></thead><tbody></tbody></table></div>
         </div>
         <div class="card">
           <div class="card-h">Trade history</div>
-          <div class="table-wrap"><table class="tbl" id="pHist"><thead><tr><th>Time</th><th>Side</th><th>Asset</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Realized</th></tr></thead><tbody></tbody></table></div>
+          <div class="table-wrap"><table class="tbl" id="pHist"><thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Asset</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Realized</th></tr></thead><tbody></tbody></table></div>
         </div>
       </div>
     </div>

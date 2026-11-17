@@ -6,7 +6,7 @@ A real-time crypto market analysis and trading education site. It's a static sit
 - **Exchange switcher**: Binance, Bybit, OKX, Coinbase or Kraken, picked from the header (link straight to one with `?ex=bybit`)
 - **Markets**: live prices, 24h change, high/low and volume for 12 major coins, streamed over WebSocket
 - **Analyze**: candlestick chart (1m–1D) with SMA 20, EMA 50, Bollinger Bands, auto support/resistance, RSI and MACD panes, plus a live order book, a trades tape and a plain-English technical summary
-- **Paper Trade**: $10,000 of virtual money at live prices with a 0.1% fee, positions and P&L (stored in the browser)
+- **Paper Trade**: $10,000 of virtual money at live prices. Spot buy / sell (0.1% fee) and simulated Futures long / short with 1–50× leverage, take profit / stop loss and liquidation (stored in the browser)
 - **Learn**: 8 lessons with "See it live" links to the chart, a position-size calculator and a quiz
 
 Data comes from each exchange's public market-data API (no keys). Binance, Bybit and OKX quote in USDT; Coinbase and Kraken quote in USD. Coinbase has no 4h candles and no TRX, and its order book refreshes every 2 seconds instead of streaming.

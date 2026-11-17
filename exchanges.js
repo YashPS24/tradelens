@@ -15,13 +15,15 @@ let onSocketStatus = () => {};
 
 class Socket {
   constructor(key, url, { onOpen, onMessage, ping, pingMs = 20000 }) {
-    Object.assign(this, { key, url, onOpen, onMessage, ping, pingMs, retry: 0, closed: false, isOpen: false });
+    const urls = Array.isArray(url) ? url : [url];
+    Object.assign(this, { key, urls, ui: 0, onOpen, onMessage, ping, pingMs, retry: 0, closed: false, isOpen: false, everOpened: false });
     sockets[key] = this; this.open();
   }
   open() {
-    const ws = (this.ws = new WebSocket(this.url));
+    let ws;
+    try { ws = this.ws = new WebSocket(this.urls[this.ui]); } catch { this.ui = (this.ui + 1) % this.urls.length; return setTimeout(() => this.open(), 1000); }
     ws.onopen = () => {
-      this.retry = 0; this.isOpen = true; onSocketStatus();
+      this.retry = 0; this.isOpen = true; this.everOpened = true; onSocketStatus();
       this.onOpen && this.onOpen(this);
       if (this.ping) this.timer = setInterval(() => this.send(this.ping), this.pingMs);
     };
@@ -29,6 +31,7 @@ class Socket {
     ws.onclose = () => {
       this.isOpen = false; clearInterval(this.timer);
       if (this.closed) return;
+      if (!this.everOpened) this.ui = (this.ui + 1) % this.urls.length; // try the backup domain
       onSocketStatus();
       setTimeout(() => !this.closed && this.open(), Math.min(30000, 1000 * 2 ** this.retry++));
     };
@@ -53,38 +56,55 @@ class LocalBook {
   }
 }
 
+class NetError extends Error {
+  constructor(msg, status, host) { super(msg); this.status = status; this.host = host; }
+}
 async function getJSON(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status} from ${new URL(url).host}`);
+  const host = new URL(url).host;
+  let r;
+  try { r = await fetch(url); } catch { throw new NetError(`Could not reach ${host}`, 0, host); }
+  if (!r.ok) throw new NetError(`HTTP ${r.status} from ${host}`, r.status, host);
   return r.json();
+}
+// Try each host in turn and remember the first one that works.
+const goodHost = {};
+async function getJSONFrom(id, hosts, path) {
+  const order = goodHost[id] ? [goodHost[id], ...hosts.filter((h) => h !== goodHost[id])] : hosts;
+  let err;
+  for (const h of order) {
+    try { const j = await getJSON(h + path); goodHost[id] = h; return j; } catch (e) { err = e; }
+  }
+  throw err;
 }
 const chunk = (arr, n) => arr.reduce((o, x, i) => (i % n ? o[o.length - 1].push(x) : o.push([x]), o), []);
 const closeAll = (...xs) => () => xs.forEach((x) => (typeof x === 'function' ? x() : x.close()));
 
 /* ---------- Binance ---------- */
-const BN_REST = 'https://data-api.binance.vision/api/v3';
-const BN_WS = 'wss://data-stream.binance.vision/stream?streams=';
+const BN_HOSTS = ['https://data-api.binance.vision', 'https://api.binance.com', 'https://api-gcp.binance.com'];
+const BN_WS = ['wss://data-stream.binance.vision/stream?streams=', 'wss://stream.binance.com:9443/stream?streams='];
+const bnGet = (path) => getJSONFrom('binance', BN_HOSTS, '/api/v3' + path);
+const bnWs = (streams) => BN_WS.map((u) => u + streams.join('/'));
 const binance = {
   id: 'binance', name: 'Binance', quote: 'USDT', assets: ALL_ASSETS,
   intervals: { '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d' },
   async snapshot(assets) {
     const syms = assets.map((a) => a + 'USDT');
-    const arr = await getJSON(`${BN_REST}/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(syms))}`);
+    const arr = await bnGet(`/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(syms))}`);
     return arr.map((d) => ({ asset: d.symbol.replace(/USDT$/, ''), price: +d.lastPrice, chg: +d.priceChangePercent, high: +d.highPrice, low: +d.lowPrice, vol: +d.quoteVolume }));
   },
   tickers(assets, on) {
-    const s = new Socket('tickers', BN_WS + assets.map((a) => a.toLowerCase() + 'usdt@ticker').join('/'), {
+    const s = new Socket('tickers', bnWs(assets.map((a) => a.toLowerCase() + 'usdt@ticker')), {
       onMessage: (m) => { const d = m && m.data; if (d) on({ asset: d.s.replace(/USDT$/, ''), price: +d.c, chg: +d.P, high: +d.h, low: +d.l, vol: +d.q }); },
     });
     return closeAll(s);
   },
   async klines(a, iv) {
-    const rows = await getJSON(`${BN_REST}/klines?symbol=${a}USDT&interval=${this.intervals[iv]}&limit=600`);
+    const rows = await bnGet(`/klines?symbol=${a}USDT&interval=${this.intervals[iv]}&limit=600`);
     return rows.map((k) => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
   },
   chart(a, iv, h) {
     const s = a.toLowerCase() + 'usdt';
-    const sock = new Socket('chart', BN_WS + [`${s}@kline_${this.intervals[iv]}`, `${s}@aggTrade`, `${s}@depth20@100ms`].join('/'), {
+    const sock = new Socket('chart', bnWs([`${s}@kline_${this.intervals[iv]}`, `${s}@aggTrade`, `${s}@depth20@100ms`]), {
       onMessage: (m) => {
         if (!m || !m.stream) return; const d = m.data;
         if (m.stream.includes('@kline')) h.kline({ t: d.k.t, o: +d.k.o, h: +d.k.h, l: +d.k.l, c: +d.k.c, v: +d.k.v });
@@ -97,13 +117,14 @@ const binance = {
 };
 
 /* ---------- Bybit (spot, v5) ---------- */
-const BY_REST = 'https://api.bybit.com/v5/market';
-const BY_WS = 'wss://stream.bybit.com/v5/public/spot';
+const BY_HOSTS = ['https://api.bybit.com', 'https://api.bytick.com'];
+const BY_WS = ['wss://stream.bybit.com/v5/public/spot', 'wss://stream.bytick.com/v5/public/spot'];
+const byGet = (path) => getJSONFrom('bybit', BY_HOSTS, '/v5/market' + path);
 const bybit = {
   id: 'bybit', name: 'Bybit', quote: 'USDT', assets: ALL_ASSETS,
   intervals: { '1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240', '1d': 'D' },
   async snapshot() {
-    const j = await getJSON(`${BY_REST}/tickers?category=spot`);
+    const j = await byGet('/tickers?category=spot');
     return j.result.list.filter((x) => x.symbol.endsWith('USDT')).map(bybit._t);
   },
   _t: (x) => ({ asset: x.symbol.replace(/USDT$/, ''), price: +x.lastPrice, chg: +x.price24hPcnt * 100, high: +x.highPrice24h, low: +x.lowPrice24h, vol: +x.turnover24h }),
@@ -116,7 +137,7 @@ const bybit = {
     return closeAll(s);
   },
   async klines(a, iv) {
-    const j = await getJSON(`${BY_REST}/kline?category=spot&symbol=${a}USDT&interval=${this.intervals[iv]}&limit=1000`);
+    const j = await byGet(`/kline?category=spot&symbol=${a}USDT&interval=${this.intervals[iv]}&limit=1000`);
     return j.result.list.reverse().map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
   },
   chart(a, iv, h) {
