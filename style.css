@@ -34,6 +34,10 @@ button, select, input { font: inherit; color: inherit; }
 .tabs button { background: none; border: 0; padding: 7px 12px; border-radius: 8px; color: var(--muted); cursor: pointer; white-space: nowrap; font-weight: 500; }
 .tabs button:hover { color: var(--text); background: var(--panel); }
 .tabs button.active { color: var(--text); background: var(--panel2); }
+.ex-pick { display: flex; align-items: center; gap: 6px; }
+.ex-pick select { padding: 5px 8px; font-weight: 600; }
+.notice { background: rgba(245,165,36,.12); border: 1px solid rgba(245,165,36,.4); color: var(--warn); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.seg button:disabled { opacity: .35; cursor: not-allowed; }
 .status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
 .dot.on { background: var(--up); box-shadow: 0 0 0 3px rgba(22,199,132,.2); }
@@ -178,6 +182,7 @@ select, input[type=number] { background: var(--panel); border: 1px solid var(--b
   .top { padding: 10px 16px; gap: 8px; }
   .tabs { order: 3; flex-basis: 100%; }
   .status { margin-left: auto; }
+  .ex-pick .small { display: none; }
   .hide-sm { display: none; }
   .cards3 { grid-template-columns: 1fr; }
   .lessons { grid-template-columns: minmax(0, 1fr); }

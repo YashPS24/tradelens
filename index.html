@@ -19,6 +19,7 @@
     <button data-view="paper">Paper Trade</button>
     <button data-view="learn">Learn</button>
   </nav>
+  <label class="ex-pick"><span class="muted small">Exchange</span><select id="exSel" aria-label="Exchange"></select></label>
   <div class="status"><span id="liveDot" class="dot"></span><span id="liveText">Connecting…</span></div>
 </header>
 
@@ -27,11 +28,12 @@
   <section id="view-markets" class="view active">
     <div class="section-head">
       <h1>Live markets</h1>
-      <p class="muted">Streaming prices from Binance public market data. Click any row to analyze it.</p>
+      <p class="muted">Streaming prices from <b id="mktSource">Binance</b> public market data. Click any row to analyze it.</p>
     </div>
+    <div id="notice" class="notice" hidden></div>
     <div class="table-wrap">
       <table class="mkt" id="mktTable">
-        <thead><tr><th>Asset</th><th class="r">Price (USDT)</th><th class="r">24h %</th><th class="r hide-sm">24h High</th><th class="r hide-sm">24h Low</th><th class="hide-sm">24h Range</th><th class="r hide-sm">Volume (USDT)</th></tr></thead>
+        <thead><tr><th>Asset</th><th class="r">Price (<span id="mktQuote">USDT</span>)</th><th class="r">24h %</th><th class="r hide-sm">24h High</th><th class="r hide-sm">24h Low</th><th class="hide-sm">24h Range</th><th class="r hide-sm">Volume (USDT)</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -61,6 +63,7 @@
     <div class="analyze-grid">
       <div class="charts">
         <div class="chart-label">Price · Volume</div>
+        <div id="chartErr" class="notice" hidden></div>
         <div id="chMain" class="ch ch-main"></div>
         <div class="chart-label">RSI (14)</div>
         <div id="chRsi" class="ch ch-rsi"></div>
@@ -155,9 +158,10 @@
 </main>
 
 <footer class="foot">
-  Educational tool only, not financial advice. Market data: Binance public API. Paper trades use virtual money.
+  Educational tool only, not financial advice. Market data: public APIs of the selected exchange (Binance, Bybit, OKX, Coinbase, Kraken). Paper trades use virtual money.
 </footer>
 
+<script src="exchanges.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

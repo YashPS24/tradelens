@@ -1,20 +1,26 @@
 /* TradeLens: real-time crypto analysis + learning. No build step, no API key. */
 'use strict';
 
-const REST = 'https://data-api.binance.vision/api/v3';
-const WS = 'wss://data-stream.binance.vision/stream?streams=';
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'DOTUSDT', 'LTCUSDT', 'TRXUSDT'];
 const NAMES = { BTC: 'Bitcoin', ETH: 'Ethereum', BNB: 'BNB', SOL: 'Solana', XRP: 'XRP', ADA: 'Cardano', DOGE: 'Dogecoin', AVAX: 'Avalanche', LINK: 'Chainlink', DOT: 'Polkadot', LTC: 'Litecoin', TRX: 'TRON' };
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60; // show chart times in local time
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const base = (s) => s.replace('USDT', '');
+const base = (s) => s.replace(/USDT?$/, '');
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
+const EX_KEY = 'tradelens_exchange_v1';
+const initialEx = (() => {
+  const q = new URLSearchParams(location.search).get('ex');
+  if (q && EXCHANGES[q]) return q;
+  try { const s = localStorage.getItem(EX_KEY); if (s && EXCHANGES[s]) return s; } catch {}
+  return 'binance';
+})();
+
 const state = {
+  ex: initialEx,
   tickers: {},
-  symbol: 'BTCUSDT',
+  symbol: 'BTC',
   interval: '1h',
   candles: [],
   highlight: null,
@@ -29,32 +35,18 @@ const fmtCompact = (v) => Intl.NumberFormat(undefined, { notation: 'compact', ma
 const fmtQty = (q) => q.toLocaleString(undefined, { maximumFractionDigits: q >= 1 ? 4 : 6 });
 const cls = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : '');
 
-/* ---------- reconnecting websocket ---------- */
-const sockets = {};
-function updateStatus() {
+const EX = () => EXCHANGES[state.ex];
+const pair = (a) => `${a} / ${EX().quote}`;
+
+/* ---------- connection status ---------- */
+onSocketStatus = function updateStatus() {
   const open = Object.values(sockets).some((s) => s.isOpen);
   const any = Object.keys(sockets).length;
   $('#liveDot').className = 'dot ' + (open ? 'on' : any ? 'off' : '');
-  $('#liveText').textContent = open ? 'Live' : 'Reconnecting…';
-}
-class Stream {
-  constructor(key, streams, onMsg) {
-    this.key = key; this.streams = streams; this.onMsg = onMsg; this.retry = 0; this.closed = false; this.isOpen = false;
-    sockets[key] = this; this.open();
-  }
-  open() {
-    this.ws = new WebSocket(WS + this.streams.join('/'));
-    this.ws.onopen = () => { this.retry = 0; this.isOpen = true; updateStatus(); };
-    this.ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.data) this.onMsg(m.stream, m.data); };
-    this.ws.onclose = () => {
-      this.isOpen = false;
-      if (this.closed) return;
-      updateStatus();
-      setTimeout(() => !this.closed && this.open(), Math.min(30000, 1000 * 2 ** this.retry++));
-    };
-    this.ws.onerror = () => this.ws.close();
-  }
-  close() { this.closed = true; this.ws && this.ws.close(); if (sockets[this.key] === this) delete sockets[this.key]; }
+  $('#liveText').textContent = open ? `Live · ${EX().name}` : 'Reconnecting…';
+};
+function notice(msg) {
+  const n = $('#notice'); n.textContent = msg || ''; n.hidden = !msg;
 }
 
 /* ---------- views ---------- */
@@ -70,9 +62,10 @@ $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button
 /* ================= MARKETS ================= */
 function buildMarketRows() {
   const tb = $('#mktTable tbody');
-  tb.innerHTML = SYMBOLS.map((s) => `
+  $('#mktQuote').textContent = EX().quote; $('#mktSource').textContent = EX().name;
+  tb.innerHTML = EX().assets.map((s) => `
     <tr data-s="${s}">
-      <td><div class="asset"><span class="ic">${base(s).slice(0, 3)}</span><div>${base(s)}<br><small>${NAMES[base(s)] || ''}</small></div></div></td>
+      <td><div class="asset"><span class="ic">${s.slice(0, 3)}</span><div>${s}<br><small>${NAMES[s] || ''}</small></div></div></td>
       <td class="r" data-f="price">—</td>
       <td class="r" data-f="chg">—</td>
       <td class="r hide-sm" data-f="high">—</td>
@@ -80,11 +73,11 @@ function buildMarketRows() {
       <td class="hide-sm"><div class="range"><i data-f="rng"></i></div></td>
       <td class="r hide-sm" data-f="vol">—</td>
     </tr>`).join('');
-  tb.addEventListener('click', (e) => {
-    const tr = e.target.closest('tr'); if (!tr) return;
-    selectSymbol(tr.dataset.s); showView('analyze');
-  });
 }
+$('#mktTable tbody').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  selectSymbol(tr.dataset.s); showView('analyze');
+});
 function renderTicker(sym) {
   const t = state.tickers[sym]; const tr = $(`#mktTable tr[data-s="${sym}"]`); if (!t || !tr) return;
   const pc = tr.querySelector('[data-f=price]');
@@ -103,16 +96,17 @@ function renderTicker(sym) {
 let summaryQueued = false;
 function renderMarketSummary() {
   summaryQueued = false;
-  const list = SYMBOLS.map((s) => ({ s, ...state.tickers[s] })).filter((t) => t.price != null);
+  const list = EX().assets.map((s) => ({ s, ...state.tickers[s] })).filter((t) => t.price != null);
   if (!list.length) return;
   const sorted = [...list].sort((a, b) => b.chg - a.chg);
   const g = sorted[0], l = sorted.at(-1);
-  $('#topGain').innerHTML = `${base(g.s)} <span class="up">${fmtPct(g.chg)}</span>`;
-  $('#topLose').innerHTML = `${base(l.s)} <span class="down">${fmtPct(l.chg)}</span>`;
+  $('#topGain').innerHTML = `${g.s} <span class="up">${fmtPct(g.chg)}</span>`;
+  $('#topLose').innerHTML = `${l.s} <span class="down">${fmtPct(l.chg)}</span>`;
   const ups = list.filter((t) => t.chg > 0).length;
   $('#breadth').innerHTML = `<span class="up">${ups} up</span> · <span class="down">${list.length - ups} down</span>`;
 }
 function setTicker(sym, t) {
+  if (!EX().assets.includes(sym) || !(t.price > 0)) return;
   const old = state.tickers[sym];
   state.tickers[sym] = { ...t, prev: old ? old.price : null };
   renderTicker(sym);
@@ -121,15 +115,20 @@ function setTicker(sym, t) {
   if (sym === $('#pSym').value) $('#pPx').textContent = fmtP(t.price);
   queuePaperRender();
 }
-async function initMarkets() {
-  buildMarketRows();
+let stopTickers = null, marketsToken = 0;
+async function startMarkets() {
+  const tok = ++marketsToken, ex = EX();
+  if (stopTickers) { stopTickers(); stopTickers = null; }
+  buildMarketRows(); notice('');
+  const onT = (t) => tok === marketsToken && setTicker(t.asset, t);
+  stopTickers = ex.tickers(ex.assets, onT);
   try {
-    const r = await fetch(`${REST}/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(SYMBOLS))}`);
-    const arr = await r.json();
-    arr.forEach((d) => setTicker(d.symbol, { price: +d.lastPrice, chg: +d.priceChangePercent, high: +d.highPrice, low: +d.lowPrice, vol: +d.quoteVolume }));
-  } catch (e) { console.warn('ticker snapshot failed', e); }
-  new Stream('tickers', SYMBOLS.map((s) => s.toLowerCase() + '@ticker'), (_, d) =>
-    setTicker(d.s, { price: +d.c, chg: +d.P, high: +d.h, low: +d.l, vol: +d.q }));
+    const list = await ex.snapshot(ex.assets);
+    if (tok === marketsToken) list.forEach(onT);
+  } catch (e) {
+    console.warn('ticker snapshot failed', e);
+    if (tok === marketsToken) notice(`Couldn't load data from ${ex.name}. It may be blocked in your region. Try another exchange from the menu at the top.`);
+  }
 }
 
 /* ================= INDICATORS ================= */
@@ -282,28 +281,30 @@ function drawLevels() {
 /* ================= ANALYZE: data ================= */
 let chartStream = null, loadToken = 0;
 async function loadChart() {
-  const tok = ++loadToken, sym = state.symbol, iv = state.interval;
-  if (chartStream) { chartStream.close(); chartStream = null; }
+  const tok = ++loadToken, sym = state.symbol, iv = state.interval, ex = EX();
+  if (chartStream) { chartStream(); chartStream = null; }
   $('#book').innerHTML = '<div class="muted">Loading…</div>'; $('#trades').innerHTML = '';
-  tradesBuf.length = 0;
+  $('#chartErr').hidden = true;
+  tradesBuf.length = 0; bookData = null;
+  let last = null;
   try {
-    const r = await fetch(`${REST}/klines?symbol=${sym}&interval=${iv}&limit=600`);
-    const rows = await r.json(); if (tok !== loadToken) return;
-    state.candles = rows.map((k) => ({ time: k[0] / 1000 + TZ_SHIFT, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
-    setAllData(); analyze(true);
-  } catch (e) { console.warn('klines failed', e); }
-  if (tok !== loadToken) return;
-  const s = sym.toLowerCase();
-  chartStream = new Stream('chart', [`${s}@kline_${iv}`, `${s}@aggTrade`, `${s}@depth20@100ms`], (stream, d) => {
-    if (tok !== loadToken) return;
-    if (stream.includes('@kline')) onKline(d.k);
-    else if (stream.includes('@aggTrade')) onTrade(d);
-    else onDepth(d);
-  });
+    const rows = await ex.klines(sym, iv); if (tok !== loadToken) return;
+    state.candles = rows.map(toCandle);
+    last = rows.at(-1);
+  } catch (e) {
+    console.warn('klines failed', e); if (tok !== loadToken) return;
+    state.candles = [];
+    const err = $('#chartErr'); err.hidden = false;
+    err.textContent = `Couldn't load ${pair(sym)} candles from ${ex.name}. Try another exchange or interval.`;
+  }
+  setAllData(); analyze(true);
+  const guard = (fn) => (x) => tok === loadToken && fn(x);
+  chartStream = ex.chart(sym, iv, { kline: guard(onKline), trade: guard(onTrade), book: guard(onDepth) }, last);
 }
+const toCandle = (k) => ({ time: k.t / 1000 + TZ_SHIFT, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v });
 function onKline(k) {
   const cs = state.candles; if (!cs.length) return;
-  const c = { time: k.t / 1000 + TZ_SHIFT, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
+  const c = toCandle(k);
   const last = cs.at(-1);
   if (c.time === last.time) cs[cs.length - 1] = c;
   else if (c.time > last.time) { cs.push(c); if (cs.length > 1000) cs.shift(); }
@@ -333,7 +334,7 @@ function renderBook() {
 }
 const tradesBuf = []; let tradesQueued = false;
 function onTrade(d) {
-  tradesBuf.unshift({ p: +d.p, q: +d.q, sell: d.m, t: d.T }); if (tradesBuf.length > 18) tradesBuf.length = 18;
+  tradesBuf.unshift(d); if (tradesBuf.length > 18) tradesBuf.length = 18;
   if (!tradesQueued) { tradesQueued = true; requestAnimationFrame(() => {
     tradesQueued = false;
     $('#trades').innerHTML = `<div class="brow bhead"><span>Price</span><span>Size</span><span>Time</span></div>` +
@@ -345,7 +346,8 @@ function onTrade(d) {
 let lastAnalysis = 0;
 function analyze(force) {
   const now = Date.now(); if (!force && now - lastAnalysis < 1000) return; lastAnalysis = now;
-  const cs = state.candles, I = state.ind; if (!cs.length || !I) return;
+  const cs = state.candles, I = state.ind;
+  if (!cs.length || !I) { state.levels = null; drawLevels(); $('#signals').innerHTML = ''; $('#levels').innerHTML = ''; $('#gaugeText').textContent = '—'; return; }
   const i = cs.length - 1, p = cs[i].close, sigs = [];
   const add = (key, name, verdict, value, explain) => sigs.push({ key, name, verdict, value, explain });
 
@@ -415,12 +417,37 @@ function renderHeadPrice(fallback) {
 }
 
 function selectSymbol(sym) {
-  if (!SYMBOLS.includes(sym)) return;
+  if (!EX().assets.includes(sym)) return;
   state.symbol = sym; $('#symSel').value = sym; renderHeadPrice(); loadChart();
 }
-function initAnalyze() {
-  const opts = SYMBOLS.map((s) => `<option value="${s}">${base(s)} / USDT · ${NAMES[base(s)]}</option>`).join('');
+function fillAssetSelects() {
+  const opts = EX().assets.map((s) => `<option value="${s}">${pair(s)} · ${NAMES[s]}</option>`).join('');
+  const keepP = $('#pSym').value;
   $('#symSel').innerHTML = opts; $('#pSym').innerHTML = opts;
+  $('#symSel').value = state.symbol;
+  if (EX().assets.includes(keepP)) $('#pSym').value = keepP;
+  $('#pPx').textContent = fmtP(livePrice($('#pSym').value));
+  $$('#intervalSeg button').forEach((b) => {
+    const ok = EX().intervals[b.dataset.i] != null;
+    b.disabled = !ok; b.title = ok ? '' : `${EX().name} has no ${b.dataset.i} candles`;
+  });
+}
+function switchExchange(id) {
+  if (!EXCHANGES[id] || id === state.ex) return;
+  state.ex = id; state.tickers = {};
+  try { localStorage.setItem(EX_KEY, id); } catch {}
+  try { const u = new URL(location.href); u.searchParams.set('ex', id); history.replaceState(null, '', u); } catch {}
+  $('#exSel').value = id;
+  if (!EX().assets.includes(state.symbol)) state.symbol = 'BTC';
+  if (EX().intervals[state.interval] == null) {
+    state.interval = '1h';
+    $$('#intervalSeg button').forEach((x) => x.classList.toggle('active', x.dataset.i === '1h'));
+  }
+  fillAssetSelects(); onSocketStatus(); renderHeadPrice();
+  startMarkets(); loadChart(); renderPaper();
+}
+function initAnalyze() {
+  fillAssetSelects();
   $('#symSel').addEventListener('change', (e) => selectSymbol(e.target.value));
   $('#intervalSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -434,6 +461,11 @@ function initAnalyze() {
 const PT_KEY = 'tradelens_paper_v1', FEE = 0.001;
 const freshPaper = () => ({ cash: 10000, pos: {}, hist: [], realized: 0 });
 let paper = (() => { try { return JSON.parse(localStorage.getItem(PT_KEY)) || freshPaper(); } catch { return freshPaper(); } })();
+(() => { // migrate v1 keys like "BTCUSDT" to "BTC"
+  const pos = {};
+  Object.entries(paper.pos || {}).forEach(([k, v]) => { pos[base(k)] = v; });
+  paper.pos = pos; paper.hist = (paper.hist || []).map((h) => ({ ...h, s: base(h.s) }));
+})();
 const savePaper = () => { try { localStorage.setItem(PT_KEY, JSON.stringify(paper)); } catch {} };
 const livePrice = (s) => state.tickers[s]?.price;
 function pMsg(t, ok) { const m = $('#pMsg'); m.textContent = t; m.className = 'msg ' + (ok ? 'up' : 'down'); }
@@ -446,18 +478,18 @@ function buy() {
   const qty = (usd * (1 - FEE)) / p;
   const pos = paper.pos[s] || { qty: 0, cost: 0 };
   pos.qty += qty; pos.cost += usd; paper.pos[s] = pos; paper.cash -= usd;
-  paper.hist.unshift({ t: Date.now(), side: 'BUY', s, qty, p, pnl: null }); paper.hist = paper.hist.slice(0, 100);
-  savePaper(); renderPaper(); pMsg(`Bought ${fmtQty(qty)} ${base(s)} at ${fmtP(p)}`, true);
+  paper.hist.unshift({ t: Date.now(), side: 'BUY', s, qty, p, pnl: null, ex: EX().name }); paper.hist = paper.hist.slice(0, 100);
+  savePaper(); renderPaper(); pMsg(`Bought ${fmtQty(qty)} ${s} at ${fmtP(p)} (${EX().name} price)`, true);
 }
 function sell(frac) {
   const s = $('#pSym').value, p = livePrice(s), pos = paper.pos[s];
-  if (!pos) return pMsg(`You have no ${base(s)} to sell.`);
+  if (!pos) return pMsg(`You have no ${s} to sell.`);
   if (!p) return pMsg('Waiting for live price…');
   const qty = pos.qty * frac, proceeds = qty * p * (1 - FEE), costPart = pos.cost * frac, pnl = proceeds - costPart;
   pos.qty -= qty; pos.cost -= costPart; if (frac >= 1 || pos.qty < 1e-12) delete paper.pos[s];
   paper.cash += proceeds; paper.realized += pnl;
-  paper.hist.unshift({ t: Date.now(), side: 'SELL', s, qty, p, pnl }); paper.hist = paper.hist.slice(0, 100);
-  savePaper(); renderPaper(); pMsg(`Sold ${fmtQty(qty)} ${base(s)} at ${fmtP(p)} · P&L ${fmtUsd(pnl)}`, pnl >= 0);
+  paper.hist.unshift({ t: Date.now(), side: 'SELL', s, qty, p, pnl, ex: EX().name }); paper.hist = paper.hist.slice(0, 100);
+  savePaper(); renderPaper(); pMsg(`Sold ${fmtQty(qty)} ${s} at ${fmtP(p)} (${EX().name}) · P&L ${fmtUsd(pnl)}`, pnl >= 0);
 }
 let paperQueued = false;
 function queuePaperRender() { if (!paperQueued) { paperQueued = true; setTimeout(() => { paperQueued = false; renderPaper(); }, 500); } }
@@ -465,7 +497,7 @@ function renderPaper() {
   let value = 0, upnl = 0;
   const rows = Object.entries(paper.pos).map(([s, ps]) => {
     const p = livePrice(s) || ps.cost / ps.qty, v = ps.qty * p, pl = v - ps.cost; value += v; upnl += pl;
-    return `<tr><td>${base(s)}</td><td class="r">${fmtQty(ps.qty)}</td><td class="r">${fmtP(ps.cost / ps.qty)}</td><td class="r">${fmtP(p)}</td><td class="r">${fmtUsd(v)}</td><td class="r ${cls(pl)}">${fmtUsd(pl)} (${fmtPct((pl / ps.cost) * 100)})</td></tr>`;
+    return `<tr><td>${s}</td><td class="r">${fmtQty(ps.qty)}</td><td class="r">${fmtP(ps.cost / ps.qty)}</td><td class="r">${fmtP(p)}</td><td class="r">${fmtUsd(v)}</td><td class="r ${cls(pl)}">${fmtUsd(pl)} (${fmtPct((pl / ps.cost) * 100)})</td></tr>`;
   });
   $('#pPos tbody').innerHTML = rows.join('') || '<tr><td colspan="6" class="muted">No open positions. Buy something to start.</td></tr>';
   const eq = paper.cash + value;
@@ -473,7 +505,7 @@ function renderPaper() {
   $('#pCash').textContent = fmtUsd(paper.cash);
   $('#pUpnl').innerHTML = `<span class="${cls(upnl)}">${fmtUsd(upnl)}</span>`;
   $('#pRpnl').innerHTML = `<span class="${cls(paper.realized)}">${fmtUsd(paper.realized)}</span>`;
-  $('#pHist tbody').innerHTML = paper.hist.slice(0, 30).map((h) => `<tr><td class="muted">${new Date(h.t).toLocaleString()}</td><td class="${h.side === 'BUY' ? 'up' : 'down'}">${h.side}</td><td>${base(h.s)}</td><td class="r">${fmtQty(h.qty)}</td><td class="r">${fmtP(h.p)}</td><td class="r ${h.pnl == null ? '' : cls(h.pnl)}">${h.pnl == null ? '—' : fmtUsd(h.pnl)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No trades yet.</td></tr>';
+  $('#pHist tbody').innerHTML = paper.hist.slice(0, 30).map((h) => `<tr><td class="muted">${new Date(h.t).toLocaleString()}</td><td class="${h.side === 'BUY' ? 'up' : 'down'}">${h.side}</td><td>${h.s}${h.ex ? ` <span class="muted small">${h.ex}</span>` : ''}</td><td class="r">${fmtQty(h.qty)}</td><td class="r">${fmtP(h.p)}</td><td class="r ${h.pnl == null ? '' : cls(h.pnl)}">${h.pnl == null ? '—' : fmtUsd(h.pnl)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No trades yet.</td></tr>';
 }
 function initPaper() {
   $('#pSym').addEventListener('change', () => { $('#pPx').textContent = fmtP(livePrice($('#pSym').value)); });
@@ -589,7 +621,10 @@ function initLearn() {
 }
 
 /* ================= boot ================= */
-initMarkets();
+$('#exSel').innerHTML = Object.values(EXCHANGES).map((x) => `<option value="${x.id}">${x.name}</option>`).join('');
+$('#exSel').value = state.ex;
+$('#exSel').addEventListener('change', (e) => switchExchange(e.target.value));
+startMarkets();
 initAnalyze();
 initPaper();
 initLearn();
