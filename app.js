@@ -55,6 +55,7 @@ function explainError(ex, e) {
 }
 function notice(msg) {
   const n = $('#notice'); n.textContent = msg || ''; n.hidden = !msg;
+  if (msg) n.insertAdjacentHTML('beforeend', ' <a href="diag.html" style="color:inherit;font-weight:600">Run a connection test →</a>');
 }
 
 /* ---------- views ---------- */

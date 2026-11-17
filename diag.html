@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Connection Test</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css?v=4" />
+<style>
+  .wrap { max-width: 760px; margin: 0 auto; padding: 20px 16px; }
+  .ex { margin-bottom: 12px; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .row:first-of-type { border-top: 0; }
+  .row .what { min-width: 0; overflow-wrap: anywhere; }
+  .res { font-family: "JetBrains Mono", monospace; font-weight: 600; text-align: right; }
+  .ok { color: var(--up); } .bad { color: var(--down); } .wait { color: var(--muted); } .meh { color: var(--warn); }
+  .verdict { margin-top: 8px; font-size: 13px; padding: 8px 10px; border-radius: 6px; background: var(--panel2); }
+  .actions { display: flex; gap: 8px; margin: 12px 0 16px; flex-wrap: wrap; }
+  .actions .btn { width: auto; padding: 8px 14px; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Connection test</h1>
+  <p class="muted">Checks whether this device and network can reach each exchange's public market data. Run it on the device that shows the warning, then share a screenshot or use the Copy button.</p>
+  <div class="actions">
+    <button class="btn buy" id="run">Run again</button>
+    <button class="btn ghost" id="copy" style="margin:0">Copy results</button>
+    <a class="btn ghost" href="./" style="margin:0;text-align:center;text-decoration:none">Back to TradeLens</a>
+  </div>
+  <div id="out"></div>
+  <div class="card"><div class="card-h">This device</div><pre id="dev"></pre></div>
+</div>
+<script>
+'use strict';
+const TESTS = [
+  { name: 'Binance', rest: ['https://data-api.binance.vision/api/v3/time', 'https://api.binance.com/api/v3/time'], ws: 'wss://data-stream.binance.vision/ws/btcusdt@trade' },
+  { name: 'Bybit', rest: ['https://api.bybit.com/v5/market/time', 'https://api.bytick.com/v5/market/time'], ws: 'wss://stream.bybit.com/v5/public/spot', wsSub: { op: 'subscribe', args: ['publicTrade.BTCUSDT'] } },
+  { name: 'OKX', rest: ['https://www.okx.com/api/v5/public/time'], ws: 'wss://ws.okx.com:8443/ws/v5/public', wsSub: { op: 'subscribe', args: [{ channel: 'trades', instId: 'BTC-USDT' }] } },
+  { name: 'Coinbase', rest: ['https://api.exchange.coinbase.com/time'], ws: 'wss://ws-feed.exchange.coinbase.com', wsSub: { type: 'subscribe', product_ids: ['BTC-USD'], channels: ['matches'] } },
+  { name: 'Kraken', rest: ['https://api.kraken.com/0/public/Ticker?pair=XBTUSD'], ws: 'wss://ws.kraken.com/v2', wsSub: { method: 'subscribe', params: { channel: 'trade', symbol: ['BTC/USD'] } } },
+];
+const results = [];
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
+async function testRest(url) {
+  const t0 = performance.now();
+  try {
+    const r = await withTimeout(fetch(url, { cache: 'no-store' }), 8000);
+    const ms = Math.round(performance.now() - t0);
+    if (r.ok) return { ok: true, txt: `OK ${ms}ms` };
+    return { ok: false, code: 'http', txt: `HTTP ${r.status}`, status: r.status };
+  } catch (e) {
+    // Network failure or CORS? A no-cors request succeeds if the server is reachable at all.
+    try { await withTimeout(fetch(url, { mode: 'no-cors', cache: 'no-store' }), 8000); return { ok: false, code: 'cors', txt: 'Reachable, but browser blocked the reply' }; }
+    catch (e2) { return { ok: false, code: e2.message === 'timeout' ? 'timeout' : 'net', txt: e2.message === 'timeout' ? 'Timed out' : 'Unreachable' }; }
+  }
+}
+function testWs(t) {
+  return new Promise((resolve) => {
+    const t0 = performance.now(); let done = false, ws;
+    const finish = (r) => { if (done) return; done = true; try { ws.close(); } catch {} resolve(r); };
+    try { ws = new WebSocket(t.ws); } catch { return finish({ ok: false, txt: 'Unreachable' }); }
+    ws.onopen = () => { if (t.wsSub) ws.send(JSON.stringify(t.wsSub)); };
+    ws.onmessage = () => finish({ ok: true, txt: `OK ${Math.round(performance.now() - t0)}ms` });
+    ws.onerror = () => finish({ ok: false, txt: 'Unreachable' });
+    ws.onclose = (e) => finish({ ok: false, txt: `Closed (${e.code})` });
+    setTimeout(() => finish({ ok: false, txt: 'Timed out' }), 10000);
+  });
+}
+function verdict(rest, ws) {
+  const anyRest = rest.some((r) => r.ok);
+  if (anyRest && ws.ok) return ['ok', 'Works on this device.'];
+  if (!anyRest && !ws.ok) {
+    if (rest.some((r) => r.status === 403 || r.status === 451)) return ['bad', 'The exchange refuses this location or network (HTTP 403). Usually a country block. A VPN set to an allowed country, or another exchange, is needed.'];
+    if (rest.some((r) => r.code === 'cors')) return ['bad', 'The server answers, but the reply is blocked in the browser. Often a browser extension, privacy setting or network filter.'];
+    return ['bad', 'Completely unreachable. The network (mobile carrier, Wi-Fi, firewall), a VPN, iCloud Private Relay or an ad/privacy blocker is blocking this exchange.'];
+  }
+  return ['meh', anyRest ? 'Price snapshot works but the live stream is blocked: prices may load but not update.' : 'Live stream works but snapshots fail: the site should still work after a few seconds.'];
+}
+async function run() {
+  results.length = 0;
+  const out = document.getElementById('out');
+  out.innerHTML = TESTS.map((t, i) => `<div class="card ex" id="ex${i}"><div class="card-h">${t.name}</div>${t.rest.map((u, j) => `<div class="row"><span class="what muted">Data API · ${new URL(u).host}</span><span class="res wait" id="r${i}_${j}">testing…</span></div>`).join('')}<div class="row"><span class="what muted">Live stream · ${new URL(t.ws).host}</span><span class="res wait" id="w${i}">testing…</span></div><div class="verdict" id="v${i}" hidden></div></div>`).join('');
+  await Promise.all(TESTS.map(async (t, i) => {
+    const rest = await Promise.all(t.rest.map(testRest));
+    rest.forEach((r, j) => { const el = document.getElementById(`r${i}_${j}`); el.textContent = r.txt; el.className = 'res ' + (r.ok ? 'ok' : 'bad'); });
+    const ws = await testWs(t);
+    const we = document.getElementById(`w${i}`); we.textContent = ws.txt; we.className = 'res ' + (ws.ok ? 'ok' : 'bad');
+    const [k, msg] = verdict(rest, ws); const v = document.getElementById(`v${i}`); v.hidden = false; v.className = 'verdict ' + k; v.textContent = msg;
+    results[i] = `${t.name}: ${rest.map((r, j) => `${new URL(t.rest[j]).host}=${r.txt}`).join(', ')}, stream=${ws.txt}`;
+  }));
+}
+const dev = [`Browser: ${navigator.userAgent}`, `Language: ${navigator.language}`, `Time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`, `Online: ${navigator.onLine}`, navigator.connection ? `Connection: ${navigator.connection.effectiveType || ''}` : ''].filter(Boolean).join('\n');
+document.getElementById('dev').textContent = dev;
+document.getElementById('run').onclick = run;
+document.getElementById('copy').onclick = async () => {
+  const txt = `TradeLens connection test ${new Date().toISOString()}\n${results.filter(Boolean).join('\n')}\n${dev}`;
+  try { await navigator.clipboard.writeText(txt); document.getElementById('copy').textContent = 'Copied ✓'; }
+  catch { prompt('Copy these results:', txt); }
+};
+run();
+</script>
+</body>
+</html>
