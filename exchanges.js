@@ -13,16 +13,42 @@ const IV_SEC = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d':
 const sockets = {};
 let onSocketStatus = () => {};
 
+/* ---------- relay (for networks that block exchanges) ----------
+ * Set RELAY to your deployed Cloudflare Worker URL (see relay/worker.js and the README).
+ * The site tries the exchange directly first, then the relay, and remembers what worked on this device. */
+const RELAY = 'https://tradelens-relay.tradelens-app.workers.dev';
+const ROUTE_KEY = 'tradelens_route_v1';
+const routes = (() => { try { return JSON.parse(localStorage.getItem(ROUTE_KEY)) || {}; } catch { return {}; } })();
+let onRouteChange = () => {};
+function setRoute(id, r) {
+  if (!id || routes[id] === r) return;
+  routes[id] = r; try { localStorage.setItem(ROUTE_KEY, JSON.stringify(routes)); } catch {}
+  onRouteChange();
+}
+const viaRelay = (u) => { const x = new URL(u); return RELAY.replace(/^http/, x.protocol === 'wss:' ? 'ws' : 'http') + '/h/' + x.host + x.pathname + x.search; };
+const isRelayUrl = (u) => !!RELAY && new URL(u).host === new URL(RELAY).host;
+function candidates(id, urls) {
+  urls = Array.isArray(urls) ? urls : [urls];
+  if (!RELAY) return urls;
+  const relay = viaRelay(urls[0]);
+  return routes[id] === 'relay' ? [relay, ...urls] : [...urls, relay];
+}
+const wsList = (id, urls) => Object.assign(candidates(id, urls), { exId: id });
+
 class Socket {
   constructor(key, url, { onOpen, onMessage, ping, pingMs = 20000 }) {
     const urls = Array.isArray(url) ? url : [url];
-    Object.assign(this, { key, urls, ui: 0, onOpen, onMessage, ping, pingMs, retry: 0, closed: false, isOpen: false, everOpened: false });
+    Object.assign(this, { key, urls, exId: url.exId, ui: 0, onOpen, onMessage, ping, pingMs, retry: 0, closed: false, isOpen: false, everOpened: false });
     sockets[key] = this; this.open();
   }
   open() {
     let ws;
     try { ws = this.ws = new WebSocket(this.urls[this.ui]); } catch { this.ui = (this.ui + 1) % this.urls.length; return setTimeout(() => this.open(), 1000); }
+    clearTimeout(this.ct);
+    this.ct = setTimeout(() => { if (ws.readyState !== 1) ws.close(); }, 7000); // blocked networks often hang instead of failing
     ws.onopen = () => {
+      clearTimeout(this.ct);
+      setRoute(this.exId, isRelayUrl(this.urls[this.ui]) ? 'relay' : 'direct');
       this.retry = 0; this.isOpen = true; this.everOpened = true; onSocketStatus();
       this.onOpen && this.onOpen(this);
       if (this.ping) this.timer = setInterval(() => this.send(this.ping), this.pingMs);
@@ -38,7 +64,7 @@ class Socket {
     ws.onerror = () => ws.close();
   }
   send(o) { if (this.ws && this.ws.readyState === 1) this.ws.send(typeof o === 'string' ? o : JSON.stringify(o)); }
-  close() { this.closed = true; clearInterval(this.timer); this.ws && this.ws.close(); if (sockets[this.key] === this) delete sockets[this.key]; }
+  close() { this.closed = true; clearInterval(this.timer); clearTimeout(this.ct); this.ws && this.ws.close(); if (sockets[this.key] === this) delete sockets[this.key]; }
 }
 
 class LocalBook {
@@ -62,17 +88,22 @@ class NetError extends Error {
 async function getJSON(url) {
   const host = new URL(url).host;
   let r;
-  try { r = await fetch(url); } catch { throw new NetError(`Could not reach ${host}`, 0, host); }
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 8000);
+  try { r = await fetch(url, { signal: ctl.signal }); } catch { throw new NetError(`Could not reach ${host}`, 0, host); } finally { clearTimeout(t); }
   if (!r.ok) throw new NetError(`HTTP ${r.status} from ${host}`, r.status, host);
   return r.json();
 }
-// Try each host in turn and remember the first one that works.
-const goodHost = {};
-async function getJSONFrom(id, hosts, path) {
-  const order = goodHost[id] ? [goodHost[id], ...hosts.filter((h) => h !== goodHost[id])] : hosts;
+// Try the direct URL(s), then the relay; remember which route worked.
+const goodUrl = {};
+async function xget(id, urls) {
+  const list = candidates(id, urls);
+  const order = goodUrl[id] != null && list[goodUrl[id]] ? [list[goodUrl[id]], ...list.filter((_, i) => i !== goodUrl[id])] : list;
   let err;
-  for (const h of order) {
-    try { const j = await getJSON(h + path); goodHost[id] = h; return j; } catch (e) { err = e; }
+  for (const u of order) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { const j = await getJSON(u); goodUrl[id] = list.indexOf(u); setRoute(id, isRelayUrl(u) ? 'relay' : 'direct'); return j; }
+      catch (e) { err = e; if (e.status !== 429) break; await new Promise((r) => setTimeout(r, 800 * (attempt + 1))); } // rate-limited: wait and retry
+    }
   }
   throw err;
 }
@@ -82,8 +113,8 @@ const closeAll = (...xs) => () => xs.forEach((x) => (typeof x === 'function' ? x
 /* ---------- Binance ---------- */
 const BN_HOSTS = ['https://data-api.binance.vision', 'https://api.binance.com', 'https://api-gcp.binance.com'];
 const BN_WS = ['wss://data-stream.binance.vision/stream?streams=', 'wss://stream.binance.com:9443/stream?streams='];
-const bnGet = (path) => getJSONFrom('binance', BN_HOSTS, '/api/v3' + path);
-const bnWs = (streams) => BN_WS.map((u) => u + streams.join('/'));
+const bnGet = (path) => xget('binance', BN_HOSTS.map((h) => h + '/api/v3' + path));
+const bnWs = (streams) => wsList('binance', BN_WS.map((u) => u + streams.join('/')));
 const binance = {
   id: 'binance', name: 'Binance', quote: 'USDT', assets: ALL_ASSETS,
   intervals: { '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d' },
@@ -119,7 +150,7 @@ const binance = {
 /* ---------- Bybit (spot, v5) ---------- */
 const BY_HOSTS = ['https://api.bybit.com', 'https://api.bytick.com'];
 const BY_WS = ['wss://stream.bybit.com/v5/public/spot', 'wss://stream.bytick.com/v5/public/spot'];
-const byGet = (path) => getJSONFrom('bybit', BY_HOSTS, '/v5/market' + path);
+const byGet = (path) => xget('bybit', BY_HOSTS.map((h) => h + '/v5/market' + path));
 const bybit = {
   id: 'bybit', name: 'Bybit', quote: 'USDT', assets: ALL_ASSETS,
   intervals: { '1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240', '1d': 'D' },
@@ -130,7 +161,7 @@ const bybit = {
   _t: (x) => ({ asset: x.symbol.replace(/USDT$/, ''), price: +x.lastPrice, chg: +x.price24hPcnt * 100, high: +x.highPrice24h, low: +x.lowPrice24h, vol: +x.turnover24h }),
   _sub: (args) => (s) => chunk(args, 10).forEach((c) => s.send({ op: 'subscribe', args: c })),
   tickers(assets, on) {
-    const s = new Socket('tickers', BY_WS, {
+    const s = new Socket('tickers', wsList('bybit', BY_WS), {
       onOpen: this._sub(assets.map((a) => `tickers.${a}USDT`)), ping: { op: 'ping' },
       onMessage: (m) => { if (m && m.topic && m.topic.startsWith('tickers.') && m.data) on(bybit._t(m.data)); },
     });
@@ -142,7 +173,7 @@ const bybit = {
   },
   chart(a, iv, h) {
     const S = a + 'USDT', book = new LocalBook(50);
-    const sock = new Socket('chart', BY_WS, {
+    const sock = new Socket('chart', wsList('bybit', BY_WS), {
       onOpen: this._sub([`kline.${this.intervals[iv]}.${S}`, `publicTrade.${S}`, `orderbook.50.${S}`]), ping: { op: 'ping' },
       onMessage: (m) => {
         if (!m || !m.topic) return;
@@ -167,11 +198,11 @@ const okx = {
   intervals: { '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1Dutc' },
   _t: (x) => ({ asset: x.instId.split('-')[0], price: +x.last, chg: ((x.last - x.open24h) / x.open24h) * 100, high: +x.high24h, low: +x.low24h, vol: +x.volCcy24h }),
   async snapshot() {
-    const j = await getJSON(`${OKX_REST}/tickers?instType=SPOT`);
+    const j = await xget('okx', `${OKX_REST}/tickers?instType=SPOT`);
     return j.data.filter((x) => x.instId.endsWith('-USDT')).map(okx._t);
   },
   tickers(assets, on) {
-    const s = new Socket('tickers', OKX_PUB, {
+    const s = new Socket('tickers', wsList('okx', OKX_PUB), {
       onOpen: (s) => s.send({ op: 'subscribe', args: assets.map((a) => ({ channel: 'tickers', instId: `${a}-USDT` })) }),
       ping: 'ping', pingMs: 25000,
       onMessage: (m) => { if (m && m.arg && m.arg.channel === 'tickers' && m.data) m.data.forEach((x) => on(okx._t(x))); },
@@ -179,12 +210,12 @@ const okx = {
     return closeAll(s);
   },
   async klines(a, iv) {
-    const j = await getJSON(`${OKX_REST}/candles?instId=${a}-USDT&bar=${this.intervals[iv]}&limit=300`);
+    const j = await xget('okx', `${OKX_REST}/candles?instId=${a}-USDT&bar=${this.intervals[iv]}&limit=300`);
     return j.data.reverse().map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
   },
   chart(a, iv, h) {
     const id = `${a}-USDT`, ch = 'candle' + this.intervals[iv];
-    const pub = new Socket('chart', OKX_PUB, {
+    const pub = new Socket('chart', wsList('okx', OKX_PUB), {
       onOpen: (s) => s.send({ op: 'subscribe', args: [{ channel: 'trades', instId: id }, { channel: 'books5', instId: id }] }),
       ping: 'ping', pingMs: 25000,
       onMessage: (m) => {
@@ -193,7 +224,7 @@ const okx = {
         else if (m.arg.channel === 'books5') { const b = m.data[0]; h.book({ bids: b.bids.map((r) => [+r[0], +r[1]]), asks: b.asks.map((r) => [+r[0], +r[1]]) }); }
       },
     });
-    const biz = new Socket('chart-candles', OKX_BIZ, {
+    const biz = new Socket('chart-candles', wsList('okx', OKX_BIZ), {
       onOpen: (s) => s.send({ op: 'subscribe', args: [{ channel: ch, instId: id }] }),
       ping: 'ping', pingMs: 25000,
       onMessage: (m) => { if (m && m.arg && m.arg.channel === ch && m.data) m.data.forEach((k) => h.kline({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })); },
@@ -210,13 +241,13 @@ const coinbase = {
   intervals: { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': null, '1d': 86400 }, // no 4h candles on Coinbase
   async snapshot(assets) {
     const res = await Promise.allSettled(assets.map(async (a) => {
-      const s = await getJSON(`${CB_REST}/${a}-USD/stats`);
+      const s = await xget('coinbase', `${CB_REST}/${a}-USD/stats`);
       return { asset: a, price: +s.last, chg: ((s.last - s.open) / s.open) * 100, high: +s.high, low: +s.low, vol: s.volume * s.last };
     }));
     return res.filter((r) => r.status === 'fulfilled').map((r) => r.value);
   },
   tickers(assets, on) {
-    const s = new Socket('tickers', CB_WS, {
+    const s = new Socket('tickers', wsList('coinbase', CB_WS), {
       onOpen: (s) => s.send({ type: 'subscribe', product_ids: assets.map((a) => `${a}-USD`), channels: ['ticker', 'heartbeat'] }),
       onMessage: (m) => {
         if (!m || m.type !== 'ticker') return; const p = +m.price;
@@ -226,13 +257,13 @@ const coinbase = {
     return closeAll(s);
   },
   async klines(a, iv) {
-    const rows = await getJSON(`${CB_REST}/${a}-USD/candles?granularity=${this.intervals[iv]}`);
+    const rows = await xget('coinbase', `${CB_REST}/${a}-USD/candles?granularity=${this.intervals[iv]}`);
     return rows.reverse().map((k) => ({ t: k[0] * 1000, o: +k[3], h: +k[2], l: +k[1], c: +k[4], v: +k[5] }));
   },
   // Coinbase has no public candle or order-book stream: build candles from live trades, poll the book over REST.
   chart(a, iv, h, last) {
     const ms = IV_SEC[iv] * 1000; let cur = last ? { ...last } : null;
-    const sock = new Socket('chart', CB_WS, {
+    const sock = new Socket('chart', wsList('coinbase', CB_WS), {
       onOpen: (s) => s.send({ type: 'subscribe', product_ids: [`${a}-USD`], channels: ['matches', 'heartbeat'] }),
       onMessage: (m) => {
         if (!m || m.type !== 'match') return;
@@ -248,7 +279,7 @@ const coinbase = {
     const poll = async () => {
       if (stop) return;
       try {
-        const b = await getJSON(`${CB_REST}/${a}-USD/book?level=2`);
+        const b = await xget('coinbase', `${CB_REST}/${a}-USD/book?level=2`);
         if (!stop) h.book({ bids: b.bids.slice(0, 20).map((r) => [+r[0], +r[1]]), asks: b.asks.slice(0, 20).map((r) => [+r[0], +r[1]]) });
       } catch {}
       if (!stop) timer = setTimeout(poll, 2000);
@@ -266,7 +297,7 @@ const kraken = {
   intervals: { '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440 },
   async snapshot() { return []; }, // the ticker WebSocket sends a snapshot on subscribe
   tickers(assets, on) {
-    const s = new Socket('tickers', KR_WS, {
+    const s = new Socket('tickers', wsList('kraken', KR_WS), {
       onOpen: (s) => s.send({ method: 'subscribe', params: { channel: 'ticker', symbol: assets.map((a) => `${a}/USD`) } }),
       ping: { method: 'ping' }, pingMs: 30000,
       onMessage: (m) => {
@@ -277,14 +308,14 @@ const kraken = {
     return closeAll(s);
   },
   async klines(a, iv) {
-    const j = await getJSON(`${KR_REST}/OHLC?pair=${encodeURIComponent(a + '/USD')}&interval=${this.intervals[iv]}`);
+    const j = await xget('kraken', `${KR_REST}/OHLC?pair=${encodeURIComponent(a + '/USD')}&interval=${this.intervals[iv]}`);
     if (j.error && j.error.length) throw new Error(j.error.join(', '));
     const key = Object.keys(j.result).find((k) => k !== 'last');
     return j.result[key].map((k) => ({ t: k[0] * 1000, o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
   },
   chart(a, iv, h) {
     const sym = `${a}/USD`, book = new LocalBook(25);
-    const sock = new Socket('chart', KR_WS, {
+    const sock = new Socket('chart', wsList('kraken', KR_WS), {
       onOpen: (s) => {
         s.send({ method: 'subscribe', params: { channel: 'ohlc', symbol: [sym], interval: this.intervals[iv] } });
         s.send({ method: 'subscribe', params: { channel: 'trade', symbol: [sym] } });

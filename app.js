@@ -44,7 +44,7 @@ onSocketStatus = function updateStatus() {
   const open = Object.values(sockets).some((s) => s.isOpen);
   const any = Object.keys(sockets).length;
   $('#liveDot').className = 'dot ' + (open ? 'on' : any ? 'off' : '');
-  $('#liveText').textContent = open ? `Live · ${EX().name}` : 'Reconnecting…';
+  $('#liveText').textContent = open ? `Live · ${EX().name}${routes[state.ex] === 'relay' ? ' (relay)' : ''}` : 'Reconnecting…';
 };
 function explainError(ex, e) {
   const st = e && e.status;
@@ -53,6 +53,7 @@ function explainError(ex, e) {
   if (st) return `${ex.name} returned an error (HTTP ${st}). Try again shortly or pick another exchange.`;
   return `Couldn't reach ${ex.name} (${(e && e.host) || 'network error'}). Check your internet connection, VPN or content blocker, or pick another exchange from the menu at the top.`;
 }
+onRouteChange = () => onSocketStatus();
 function notice(msg) {
   const n = $('#notice'); n.textContent = msg || ''; n.hidden = !msg;
   if (msg) n.insertAdjacentHTML('beforeend', ' <a href="diag.html" style="color:inherit;font-weight:600">Run a connection test →</a>');
@@ -289,8 +290,9 @@ function drawLevels() {
 }
 
 /* ================= ANALYZE: data ================= */
-let chartStream = null, loadToken = 0;
-async function loadChart() {
+let chartStream = null, loadToken = 0, chartRetries = 0;
+async function loadChart(isRetry) {
+  if (!isRetry) chartRetries = 0;
   const tok = ++loadToken, sym = state.symbol, iv = state.interval, ex = EX();
   if (chartStream) { chartStream(); chartStream = null; }
   $('#book').innerHTML = '<div class="muted">Loading…</div>'; $('#trades').innerHTML = '';
@@ -306,6 +308,10 @@ async function loadChart() {
     state.candles = [];
     const err = $('#chartErr'); err.hidden = false;
     err.textContent = `Couldn't load ${pair(sym)} candles from ${ex.name}: ${explainError(ex, e)}`;
+    if (chartRetries++ < 3) { // temporary hiccups (rate limits, slow networks): try again shortly
+      err.textContent += ' Retrying…';
+      setTimeout(() => { if (tok === loadToken) loadChart(true); }, 4000 * chartRetries);
+    }
   }
   setAllData(); analyze(true);
   const guard = (fn) => (x) => tok === loadToken && fn(x);

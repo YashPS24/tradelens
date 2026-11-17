@@ -33,3 +33,16 @@ Any static host works. Choose one:
 - Colors: edit the CSS variables in `style.css` `:root`
 
 Educational use only. This is not financial advice.
+
+## Relay for networks that block exchanges
+Some mobile carriers, Wi-Fi networks, VPNs and privacy tools block crypto exchanges. `relay/worker.js` is a small Cloudflare Worker (free plan) that forwards the public market data. The site tries each exchange directly first, then switches to the relay, and remembers what worked on that device. The header then shows "Live · Bybit (relay)".
+
+Deploy it:
+```bash
+cd relay
+npx wrangler login
+npx wrangler deploy
+```
+Then put the printed `https://tradelens-relay.<you>.workers.dev` URL in `RELAY` at the top of `exchanges.js` (this site uses `https://tradelens-relay.tradelens-app.workers.dev`). The relay only accepts requests from the origins in `ORIGINS` and only forwards to the exchange hosts in `HOSTS`.
+
+Through the relay: Bybit, OKX and Coinbase work fully. Binance refuses data requests from Cloudflare (live prices still stream, but charts do not load), and Kraken refuses streams from Cloudflare (snapshots work, live updates do not). On a blocked network, use Bybit, OKX or Coinbase.

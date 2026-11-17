@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Connection Test</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="style.css?v=4" />
+<link rel="stylesheet" href="style.css?v=5" />
 <style>
   .wrap { max-width: 760px; margin: 0 auto; padding: 20px 16px; }
   .ex { margin-bottom: 12px; }
@@ -40,6 +40,7 @@ const TESTS = [
   { name: 'OKX', rest: ['https://www.okx.com/api/v5/public/time'], ws: 'wss://ws.okx.com:8443/ws/v5/public', wsSub: { op: 'subscribe', args: [{ channel: 'trades', instId: 'BTC-USDT' }] } },
   { name: 'Coinbase', rest: ['https://api.exchange.coinbase.com/time'], ws: 'wss://ws-feed.exchange.coinbase.com', wsSub: { type: 'subscribe', product_ids: ['BTC-USD'], channels: ['matches'] } },
   { name: 'Kraken', rest: ['https://api.kraken.com/0/public/Ticker?pair=XBTUSD'], ws: 'wss://ws.kraken.com/v2', wsSub: { method: 'subscribe', params: { channel: 'trade', symbol: ['BTC/USD'] } } },
+  { name: 'TradeLens relay (used automatically when an exchange is blocked)', rest: ['https://tradelens-relay.tradelens-app.workers.dev/h/api.bybit.com/v5/market/time'], ws: 'wss://tradelens-relay.tradelens-app.workers.dev/h/stream.bybit.com/v5/public/spot', wsSub: { op: 'subscribe', args: ['publicTrade.BTCUSDT'] } },
 ];
 const results = [];
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
