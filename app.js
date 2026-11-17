@@ -66,7 +66,9 @@ function showView(v) {
   try { history.replaceState(null, '', '#' + v); } catch {}
   window.scrollTo({ top: 0 });
   if (v === 'analyze') requestAnimationFrame(fitRange);
+  if (window.onViewShown) window.onViewShown(v);
 }
+document.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showView(g.dataset.goto); } });
 $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
 
 /* ================= MARKETS ================= */
@@ -359,11 +361,9 @@ function onTrade(d) {
 }
 
 /* ================= ANALYZE: signals ================= */
-let lastAnalysis = 0;
-function analyze(force) {
-  const now = Date.now(); if (!force && now - lastAnalysis < 1000) return; lastAnalysis = now;
-  const cs = state.candles, I = state.ind;
-  if (!cs.length || !I) { state.levels = null; drawLevels(); $('#signals').innerHTML = ''; $('#levels').innerHTML = ''; $('#gaugeText').textContent = '—'; return; }
+/* Score the latest candle with simple, explainable rules. Shared by Analyze and Signals. */
+const verdictLabel = (norm) => (norm > 0.5 ? 'Strong bullish' : norm > 0.15 ? 'Leaning bullish' : norm < -0.5 ? 'Strong bearish' : norm < -0.15 ? 'Leaning bearish' : 'Neutral');
+function evaluate(cs, I) {
   const i = cs.length - 1, p = cs[i].close, sigs = [];
   const add = (key, name, verdict, value, explain) => sigs.push({ key, name, verdict, value, explain });
 
@@ -409,8 +409,16 @@ function analyze(force) {
 
   const score = sigs.reduce((s, x) => s + (x.verdict === 'bull' ? 1 : x.verdict === 'bear' ? -1 : 0), 0);
   const norm = sigs.length ? score / sigs.length : 0;
+  return { sigs, score, norm, label: verdictLabel(norm) };
+}
+
+let lastAnalysis = 0;
+function analyze(force) {
+  const now = Date.now(); if (!force && now - lastAnalysis < 1000) return; lastAnalysis = now;
+  const cs = state.candles, I = state.ind;
+  if (!cs.length || !I) { state.levels = null; drawLevels(); $('#signals').innerHTML = ''; $('#levels').innerHTML = ''; $('#gaugeText').textContent = '—'; return; }
+  const p = cs.at(-1).close, { sigs, norm, label } = evaluate(cs, I);
   $('#gaugeNeedle').style.left = `${50 + norm * 48}%`;
-  const label = norm > 0.5 ? 'Strong bullish' : norm > 0.15 ? 'Leaning bullish' : norm < -0.5 ? 'Strong bearish' : norm < -0.15 ? 'Leaning bearish' : 'Neutral';
   $('#gaugeText').innerHTML = `<span class="${cls(norm)}">${label}</span>`;
   const tagTxt = { bull: 'Bullish', bear: 'Bearish', neutral: 'Neutral' };
   $('#signals').innerHTML = sigs.map((s) => `<li class="${state.highlight === s.key ? 'hl' : ''}"><div class="sig-top"><b>${s.name}</b><span class="tag ${s.verdict}">${tagTxt[s.verdict]}</span></div><div class="sig-top"><span class="mono small">${s.value}</span></div><div class="sig-ex">${s.explain}</div></li>`).join('');
@@ -461,6 +469,7 @@ function switchExchange(id) {
   }
   fillAssetSelects(); onSocketStatus(); renderHeadPrice();
   startMarkets(); loadChart(); renderPaper(); updateForms();
+  if (window.onExchangeChanged) window.onExchangeChanged();
 }
 function initAnalyze() {
   fillAssetSelects();
@@ -794,4 +803,4 @@ initAnalyze();
 initPaper();
 initLearn();
 const startView = location.hash.slice(1);
-if (['markets', 'analyze', 'paper', 'learn'].includes(startView)) showView(startView);
+if (['markets', 'analyze', 'signals', 'paper', 'learn'].includes(startView)) setTimeout(() => showView(startView), 0); // after signals.js loads

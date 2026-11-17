@@ -7,7 +7,7 @@
 <meta name="description" content="Real-time crypto market analysis and trading education platform." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="style.css?v=5" />
+<link rel="stylesheet" href="style.css?v=6" />
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -16,6 +16,7 @@
   <nav class="tabs" id="tabs">
     <button data-view="markets" class="active">Markets</button>
     <button data-view="analyze">Analyze</button>
+    <button data-view="signals">Signals</button>
     <button data-view="paper">Paper Trade</button>
     <button data-view="learn">Learn</button>
   </nav>
@@ -88,6 +89,36 @@
           <div class="trades" id="trades"></div>
         </div>
       </aside>
+    </div>
+  </section>
+
+  <!-- SIGNALS -->
+  <section id="view-signals" class="view">
+    <div class="section-head sg-head">
+      <div>
+        <h1>Signals</h1>
+        <p class="muted">Every coin on <b id="sgEx">Binance</b>, scored on four timeframes with the same rules as the Analyze tab. Click any cell to open that chart.</p>
+      </div>
+      <div class="sg-actions"><span class="muted small" id="sgStatus"></span><button class="btn ghost sm" id="sgScan">Scan now</button></div>
+    </div>
+    <div class="progress"><div id="sgBar" class="bar"></div></div>
+    <div class="sg-filters">
+      <div class="seg" id="sgFilter"><button data-f="all" class="active">All</button><button data-f="bull">Mostly bullish</button><button data-f="bear">Mostly bearish</button></div>
+      <label class="muted small sg-auto"><input type="checkbox" id="sgAuto" checked /> Auto-refresh every 2 min</label>
+    </div>
+    <div class="card"><div class="table-wrap"><table class="tbl sg-table" id="sgTable"><thead><tr><th>Asset</th><th class="r hide-sm">Price</th><th class="r">24h</th><th>15m</th><th>1h</th><th>4h</th><th>1D</th><th>Timeframes agree</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="sg-grid">
+      <div class="card">
+        <div class="card-h">Fresh signals <span class="muted small">events in the last 3 candles, newest first</span></div>
+        <div id="sgFeed"></div>
+      </div>
+      <div class="card sg-help">
+        <div class="card-h">How to read this</div>
+        <p><b>Each cell</b> scores the latest candle with 6 rules: trend vs EMA 50, SMA 20/EMA 50 cross, RSI, MACD, Bollinger Bands and volume. The small number is bullish rules minus bearish rules.</p>
+        <p><b>Timeframes agree</b> shows how many timeframes lean the same way. Signals that agree across short and long timeframes are generally considered stronger than a single one.</p>
+        <p><b>Fresh signals</b> are specific events (crossovers, band breaks, volume spikes). Each one shows how that same event played out on that coin and timeframe in the available history: how often price moved in the signal's direction 5 candles later. Around 50% means no better than a coin flip.</p>
+        <p class="note-warn">Past results don't predict the future, and these are simple rules, not advice. Practise any idea in <a href="#paper" data-goto="paper">Paper Trade</a> first.</p>
+      </div>
     </div>
   </section>
 
@@ -185,7 +216,8 @@
   <a href="diag.html" style="color:inherit">Connection test</a> · Educational tool only, not financial advice. Market data: public APIs of the selected exchange (Binance, Bybit, OKX, Coinbase, Kraken). Paper trades use virtual money.
 </footer>
 
-<script src="exchanges.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="exchanges.js?v=6"></script>
+<script src="app.js?v=6"></script>
+<script src="signals.js?v=6"></script>
 </body>
 </html>
